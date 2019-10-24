@@ -26,6 +26,8 @@ void handler( int aListenSocket )
     sockaddr_in clientAddr;
     socklen_t   clientAddrSize = sizeof( clientAddr );
 
+    timeval*    timeout        = new timeval;
+
     fd_set      readSet;
     fd_set      errorSet;
 
@@ -37,8 +39,11 @@ void handler( int aListenSocket )
 
     for( ;; )
     {
+        timeout->tv_sec  = 0;
+        timeout->tv_usec = 0;
+
         int nread   = 0;
-        int readyFd = select( ndfs + 1, &readSet, nullptr, &errorSet, nullptr );
+        int readyFd = select( ndfs + 1, &readSet, nullptr, &errorSet, timeout );
         if( readyFd == -1 )
         {
             perror( "select" );
@@ -46,7 +51,7 @@ void handler( int aListenSocket )
         }
         else if( readyFd == 0 )
         {
-            printf( "%s \n" , "Server is wayting" );
+            printf( "%s \n" , "Server is wayting" );            
             continue;
         }
         else
@@ -87,6 +92,7 @@ void handler( int aListenSocket )
             }
         }
     }
+
 }
 
 int main( int argc, char *argv[] )
@@ -97,15 +103,13 @@ int main( int argc, char *argv[] )
 
     sockaddr_in serverAddr;
 
-//    if( argc < 2 )
-//    {
-//        perror( "Not enough arguments" );
-//        exit( EXIT_FAILURE );
-//    }
+    if( argc < 2 )
+    {
+        perror( "Not enough arguments" );
+        exit( EXIT_FAILURE );
+    }
 
-//    port = atoi( argv[1] );
-
-    port = 54000;
+    port = atoi( argv[1] );
 
     listenSocket = socket( AF_INET, SOCK_STREAM, IPPROTO_TCP );
     if( listenSocket == -1 )
