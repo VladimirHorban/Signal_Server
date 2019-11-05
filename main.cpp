@@ -9,6 +9,8 @@
 #include <sys/types.h>
 #include <sys/ioctl.h>
 #include <arpa/inet.h>
+#include <fcntl.h>
+#include <assert.h>
 #include <thread>
 
 void service( int aClientSocket )
@@ -19,102 +21,54 @@ void service( int aClientSocket )
     close( aClientSocket );
 }
 
-void handler( int aListenSocket )
-{
-    int         ndfs           = 10; // Number of file descriptors
-    int         clientSocket   = 0;
-    sockaddr_in clientAddr;
-    socklen_t   clientAddrSize = sizeof( clientAddr );
-
-    timeval*    timeout        = new timeval;
-
-    fd_set      readSet;
-    fd_set      errorSet;
-
-    FD_ZERO( &readSet );
-    FD_ZERO( &errorSet );
-
-    FD_SET( aListenSocket, &readSet );
-    FD_SET( aListenSocket, &errorSet );
-
-    for( ;; )
-    {
-        timeout->tv_sec  = 0;
-        timeout->tv_usec = 0;
-
-        int nread   = 0;
-        int readyFd = select( ndfs + 1, &readSet, nullptr, &errorSet, timeout );
-        if( readyFd == -1 )
-        {
-            perror( "select" );
-            exit( EXIT_FAILURE );
-        }
-        else if( readyFd == 0 )
-        {
-            printf( "%s \n" , "Server is wayting" );            
-            continue;
-        }
-        else
-        {
-            for( int i = 0; i < ndfs + 1; i++ )
-            {
-                if( FD_ISSET( i, &readSet ) )
-                {
-                    if( i == aListenSocket )
-                    {
-                        clientSocket = accept( aListenSocket, ( sockaddr* )&clientAddr, &clientAddrSize );
-                        FD_SET( clientSocket, &readSet );
-                    }
-                    else
-                    {
-                        ioctl( i, FIONREAD, &nread );
-                        if( nread == 0 )
-                        {
-                            close( i );
-                            FD_CLR( i, &readSet );
-                            printf( "Client %d has removed \n", i );
-                        }
-                        else
-                        {
-                            std::thread thread( service, i );
-                            thread.detach();
-                            FD_CLR( i, &readSet );
-                        }
-                    }
-
-                }
-
-                else if( FD_ISSET( i, &errorSet ) )
-                {
-                    FD_CLR( i, &errorSet );
-                    printf( "Socket %d has failed \n", i );
-                }
-            }
-        }
-    }
-
-}
-
 int main( int argc, char *argv[] )
 {
     int listenSocket   = 0;
+    int newSocket      = 0;
     int port           = 0;
     int maxConnections = 10;
+    int maxSocket      = 0;
+    int on             = 1;
+    int result         = 0;
+    int nubmerOfSockets  = 0;
+    int ready          = 0;
 
     sockaddr_in serverAddr;
 
-    if( argc < 2 )
-    {
-        perror( "Not enough arguments" );
-        exit( EXIT_FAILURE );
-    }
+    fd_set masterSet;
+    fd_set workingSet;
+//    fd_set errorSet;
 
-    port = atoi( argv[1] );
+//    if( argc < 2 )
+//    {
+//        perror( "Not enough arguments" );
+//        exit( EXIT_FAILURE );
+//    }
+
+//    port = atoi( argv[1] );
+
+    port = 54000;
 
     listenSocket = socket( AF_INET, SOCK_STREAM, IPPROTO_TCP );
     if( listenSocket == -1 )
     {
         perror( "Can not create listen socket" );
+        exit( EXIT_FAILURE );
+    }
+
+    result = setsockopt( listenSocket, SOL_SOCKET, SO_REUSEADDR, ( void* )&on, sizeof( on ) );
+    if( result == -1 )
+    {
+        perror( "setsockopt() failed" );
+        close( listenSocket );
+        exit( EXIT_FAILURE );
+    }
+
+    result = ioctl( listenSocket, FIONBIO, (char *)&on );
+    if( result == -1 )
+    {
+        perror( "ioctl() failed" );
+        close( listenSocket );
         exit( EXIT_FAILURE );
     }
 
@@ -134,7 +88,71 @@ int main( int argc, char *argv[] )
         exit( EXIT_FAILURE );
     }
 
-    handler( listenSocket );
+    FD_ZERO( &masterSet );
+    FD_SET( listenSocket, &masterSet );
+    maxSocket = listenSocket;    
+
+    for( ;; )
+    {
+        memcpy( &workingSet, &masterSet, sizeof( masterSet ) );
+
+        printf( "%s \n", "Wait for select" );
+        nubmerOfSockets = select( maxSocket + 1, &workingSet, nullptr, nullptr, nullptr );
+
+        ready = nubmerOfSockets;
+
+        if( nubmerOfSockets < 0 )
+        {
+            perror( "Select failed" );
+            break;
+        }
+        else
+        {
+            for( int i = 0; i <= maxSocket && ready > 0; i++ )
+            {
+                if( FD_ISSET( i, &workingSet ) )
+                {
+                    ready--;
+                    if( i == listenSocket )
+                    {
+                        do
+                        {
+                           newSocket = accept( listenSocket, nullptr, nullptr );
+                           if ( newSocket < 0 )
+                           {
+                              if (errno != EWOULDBLOCK)
+                              {
+                                 perror("  accept() failed");
+                                 exit( EXIT_FAILURE );
+                              }
+                              break;
+                           }
+
+                           printf( "New incoming connection - %d\n", newSocket );
+                           FD_SET( newSocket, &masterSet );
+
+                           if ( newSocket > maxSocket )
+                               maxSocket = newSocket;
+
+                        } while ( newSocket != -1 );
+                    }
+                    else
+                    {
+                        char* buffer = new char[1024];
+                        recv( i, buffer, 1024, 0 );
+                        send( i, buffer, 1024, 0 );
+                        close( i );
+                        FD_CLR( i, &masterSet );
+                        if ( i == maxSocket )
+                        {
+                           while ( FD_ISSET( maxSocket, &masterSet ) == false )
+                              maxSocket -= 1;
+                        }
+                    }
+                }
+            }
+        }
+    }
 
     return EXIT_SUCCESS;
 }
